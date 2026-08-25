@@ -3,78 +3,189 @@ import pandas as pd
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 
-# Page configuration
-st.set_page_config(page_title="Nadia Traffic AI Predictor", page_icon="🚦", layout="centered")
+# ----------------- PAGE CONFIG -----------------
+st.set_page_config(
+    page_title="Nadia AI Traffic Predictor",
+    page_icon="🚦",
+    layout="centered"
+)
 
-st.title("🚦 AI Traffic Predictor — Nadia Corridors")
-st.markdown("Predict congestion levels in **Bethuadahari (NH-12)** & **Mayapur (Hulor Ghat)** using Machine Learning.")
+# ----------------- CSS STYLING -----------------
+st.markdown("""
+    <style>
+    .main {
+        background-color: #0E1117;
+    }
+    .stButton>button {
+        width: 100%;
+        background-color: #FF4B4B;
+        color: white;
+        font-weight: bold;
+        height: 3.2em;
+        border-radius: 8px;
+        font-size: 16px;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-# Train ML model in background
+# ----------------- TRAIN DYNAMIC ML MODEL -----------------
 @st.cache_resource
-def load_trained_model():
+def train_model():
     np.random.seed(42)
-    num_samples = 1000
-    locations = np.random.choice([0, 1], size=num_samples)
-    hours = np.random.randint(0, 24, size=num_samples)
-    is_festival = np.random.choice([0, 1], size=num_samples, p=[0.85, 0.15])
-    weather = np.random.choice([0, 1], size=num_samples, p=[0.75, 0.25])
+    n_samples = 6000
 
-    train_passing, congestion_levels = [], []
-    for loc, hr, fest, weath in zip(locations, hours, is_festival, weather):
-        is_train = np.random.choice([0, 1], p=[0.7, 0.3]) if loc == 0 else 0
-        train_passing.append(is_train)
-        if loc == 0 and is_train == 1:
-            cong = 2
-        elif loc == 1 and fest == 1:
-            cong = 2
-        elif hr in [8, 9, 10, 17, 18, 19] and (weath == 1 or fest == 1):
-            cong = 2
-        elif hr in [8, 9, 10, 17, 18, 19] or weath == 1:
-            cong = 1
+    corridor = np.random.choice([0, 1], size=n_samples) # 0: Bethuadahari, 1: Mayapur
+    hour = np.random.randint(0, 24, size=n_samples)
+    
+    # Festivals: 0: None, 1: Gaura Purnima, 2: Jhulan Yatra, 3: Janmashtami / Ratha Yatra, 
+    # 4: Durga Puja / Kali Puja, 5: Jagadhatri / Rash Mela
+    festival_type = np.random.choice([0, 1, 2, 3, 4, 5], size=n_samples, p=[0.55, 0.10, 0.08, 0.09, 0.10, 0.08])
+    railway_gate = np.random.choice([0, 1], size=n_samples, p=[0.70, 0.30])
+    weather = np.random.choice([0, 1, 2], size=n_samples, p=[0.60, 0.25, 0.15]) # 0: Clear, 1: Rain, 2: Fog
+
+    score = np.zeros(n_samples)
+
+    for i in range(n_samples):
+        s = 10
+        h = hour[i]
+        c = corridor[i]
+        f = festival_type[i]
+
+        # 1. BASE TIME EFFECT
+        if 8 <= h <= 11:
+            s += 30  # Morning Peak
+        elif 17 <= h <= 21:
+            s += 35  # Evening Peak
+        elif 0 <= h <= 5:
+            s -= 15  # Late night clearance
         else:
-            cong = 0
-        congestion_levels.append(cong)
+            s += 10  # Normal Daytime
+
+        # 2. SPECIFIC FESTIVAL & TIME DYNAMICS
+        if f != 0:
+            if f == 1: # Gaura Purnima (Mayapur epic jam all day)
+                s += 50 if (7 <= h <= 23) else 25
+            elif f == 2: # Jhulan Yatra (Mayapur evening swing ceremony)
+                s += 45 if (16 <= h <= 22) else 15
+            elif f == 3: # Janmashtami / Ratha Yatra
+                s += 45 if (15 <= h <= 23) else 20
+            elif f == 4: # Durga Puja / Kali Puja (Bethuadahari NH-12 night pandal hopping)
+                s += 45 if (17 <= h <= 24 or 0 <= h <= 2) else 15
+            elif f == 5: # Jagadhatri Puja / Rash Mela
+                s += 40 if (16 <= h <= 23) else 15
+
+        # 3. RAILWAY GATE DYNAMICS (Bethuadahari NH-12)
+        if c == 0 and railway_gate[i] == 1:
+            s += 40
+
+        # 4. WEATHER DYNAMICS
+        if weather[i] == 1: # Heavy Rain
+            s += 20
+        elif weather[i] == 2: # Fog
+            s += 15
+
+        score[i] = s
+
+    # Assign 4 Target Congestion Classes
+    congestion = []
+    for s in score:
+        if s < 30:
+            congestion.append(0) # 0: Low / Smooth
+        elif s < 55:
+            congestion.append(1) # 1: Moderate
+        elif s < 80:
+            congestion.append(2) # 2: High Congestion
+        else:
+            congestion.append(3) # 3: Critical / Severe Jam
 
     df = pd.DataFrame({
-        'Location': locations, 'Hour': hours, 'Is_Festival': is_festival,
-        'Train_Passing': train_passing, 'Weather': weather, 'Congestion': congestion_levels
+        'corridor': corridor,
+        'hour': hour,
+        'festival_type': festival_type,
+        'railway_gate': railway_gate,
+        'weather': weather,
+        'congestion': congestion
     })
-    
-    X = df[['Location', 'Hour', 'Is_Festival', 'Train_Passing', 'Weather']]
-    y = df['Congestion']
-    clf = RandomForestClassifier(n_estimators=100, random_state=42)
+
+    X = df[['corridor', 'hour', 'festival_type', 'railway_gate', 'weather']]
+    y = df['congestion']
+
+    clf = RandomForestClassifier(n_estimators=120, random_state=42)
     clf.fit(X, y)
     return clf
 
-model = load_trained_model()
+model = train_model()
 
-# User input form
-st.subheader("📋 Enter Journey Details")
+# ----------------- UI INTERFACE -----------------
+st.title("🚦 Nadia AI Traffic & Festival Predictor")
+st.caption("Machine Learning prediction for NH-12 & Hulor Ghat Ghat ferry corridors with live festival dynamics.")
 
-route = st.selectbox("Select Corridor Route:", ["Bethuadahari (NH-12 Level Crossing)", "Mayapur (Hulor Ghat Road)"])
-hour = st.slider("Hour of the Day (24-Hour Format):", 0, 23, 9)
-festival = st.radio("Is today a major festival day?", ["No", "Yes"], horizontal=True)
-gate_closed = st.radio("Is the railway gate closed? (Bethuadahari Only)", ["No", "Yes"], horizontal=True)
-weather = st.selectbox("Current Weather:", ["Clear", "Rain"])
+st.markdown("---")
+st.subheader("📍 Journey & Route Configuration")
 
-if st.button("🚀 Predict Traffic Status"):
-    loc_val = 0 if "Bethuadahari" in route else 1
-    fest_val = 1 if festival == "Yes" else 0
-    train_val = 1 if (gate_closed == "Yes" and loc_val == 0) else 0
-    weather_val = 1 if weather == "Rain" else 0
+corridor_map = {
+    "Mayapur (Hulor Ghat Ferry & Temple Approach)": 1,
+    "Bethuadahari (NH-12 Junction & Level Crossing)": 0
+}
+selected_corridor_label = st.selectbox("Select Corridor:", list(corridor_map.keys()))
+selected_corridor = corridor_map[selected_corridor_label]
 
-    input_df = pd.DataFrame([[loc_val, hour, fest_val, train_val, weather_val]], 
-                            columns=['Location', 'Hour', 'Is_Festival', 'Train_Passing', 'Weather'])
+hour = st.slider("Select Time of Travel (24-Hour Clock):", min_value=0, max_value=23, value=18, 
+                 help="Slide to see how morning, afternoon, evening rush, and late night change the AI prediction.")
+
+# Route-Specific Festivals
+if selected_corridor == 1: # Mayapur
+    festival_choices = {
+        "Normal Regular Day (No Festival)": 0,
+        "Jhulan Yatra (Evening Swing Darshan)": 2,
+        "Gaura Purnima (Mega International Festival)": 1,
+        "Sri Krishna Janmashtami / Ratha Yatra": 3,
+        "Nabadwip / Mayapur Rash Mela": 5
+    }
+else: # Bethuadahari
+    festival_choices = {
+        "Normal Regular Day (No Festival)": 0,
+        "Durga Puja (Pandal Hopping & NH-12 Rush)": 4,
+        "Kali Puja / Diwali": 4,
+        "Jagadhatri Puja (Krishnanagar-Bethua Belt)": 5,
+        "Eid-ul-Fitr / Regional Mela": 3
+    }
+
+selected_fest_label = st.selectbox("Select Festival / Occasion:", list(festival_choices.keys()))
+selected_festival = festival_choices[selected_fest_label]
+
+if selected_corridor == 0:
+    gate_input = st.radio("Is Bethuadahari Railway Gate Closed?", ["No (Open)", "Yes (Closed)"], horizontal=True)
+    is_gate_closed = 1 if "Yes" in gate_input else 0
+else:
+    is_gate_closed = 0
+
+weather_map = {"Clear / Sunny": 0, "Monsoon Rain / Waterlogging": 1, "Winter Dense Fog": 2}
+selected_weather_label = st.selectbox("Weather Conditions:", list(weather_map.keys()))
+selected_weather = weather_map[selected_weather_label]
+
+st.markdown("---")
+
+# ----------------- PREDICTION INFERENCE -----------------
+if st.button("🚀 Predict Traffic Congestion"):
+    input_data = np.array([[selected_corridor, hour, selected_festival, is_gate_closed, selected_weather]])
+    pred = model.predict(input_data)[0]
+    probs = model.predict_proba(input_data)[0]
+    confidence = round(np.max(probs) * 100, 1)
+
+    labels = ["🟢 Low / Free Flow", "🟡 Moderate Movement", "🟠 High Congestion", "🔴 Critical / Severe Gridlock"]
     
-    pred = model.predict(input_df)[0]
-
-    st.markdown("---")
+    st.markdown("### 📊 AI Prediction Result")
+    
     if pred == 0:
-        st.success("🟢 **LOW CONGESTION**: Route is completely clear. Safe to travel!")
+        st.success(f"**Status:** {labels[pred]} *(Model Confidence: {confidence}%)*")
+        st.info("💡 **Advisory:** Ideal travel window. No significant delays expected at ferry ghats or level crossings.")
     elif pred == 1:
-        st.warning("🟡 **MEDIUM CONGESTION**: Moderate delays expected (15–20 min buffer suggested).")
+        st.info(f"**Status:** {labels[pred]} *(Model Confidence: {confidence}%)*")
+        st.write("💡 **Advisory:** Standard traffic flow. Minor bottlenecks possible near local market intersections.")
+    elif pred == 2:
+        st.warning(f"**Status:** {labels[pred]} *(Model Confidence: {confidence}%)*")
+        st.write("💡 **Advisory:** Heavy crowd influx detected for this time! Expect 20–40 mins waiting time at Hulor Ghat/NH-12.")
     else:
-        if loc_val == 0:
-            st.error("🔴 **SEVERE GRIDLOCK**: Railway gate active on NH-12! Delay departure by 25–30 minutes.")
-        else:
-            st.error("🔴 **SEVERE GRIDLOCK**: Hulor Ghat / Temple road choked! Take alternative ferry via Swarupganj.")
+        st.error(f"**Status:** {labels[pred]} *(Model Confidence: {confidence}%)*")
+        st.write("🚨 **Critical Warning:** Peak festival crowd surge combined with corridor congestion! Consider deferring travel or using alternative rural bypass routes.")
